@@ -1,5 +1,4 @@
 import time
-import re
 import serial
 import serial.tools.list_ports
 from tkinter import *
@@ -7,15 +6,20 @@ from tkinter import ttk
 from tkinter import messagebox
 
 BAUD_RATE = 9600
-TIMEOUT = 0.5
-SLEEP_TIME = 0.05
+TIMEOUT = 0.5 # [s]
+SLEEP_TIME = 0.05 # [s]
+INPUT_DELAY = 50 # [ms]
 
 movements = {
-    "north":    [b":Mn#"],
-    "south":    [b":Ms#"],
-    "east":     [b":Me#"],
-    "west":     [b":Mw#"],
-    "stop":     [b":Q#"],
+    "north":        [b":Mn#"],
+    "south":        [b":Ms#"],
+    "east":         [b":Me#"],
+    "west":         [b":Mw#"],
+    "stop_all":     [b":Q#"],
+    "stop_north":   [b":Qn#"],
+    "stop_south":   [b":Qs#"],
+    "stop_east":    [b":Qe#"],
+    "stop_west":    [b":Qw#"],
 }
 speeds = {
     "slowest":  [b":RG#"],
@@ -44,8 +48,22 @@ class App:
         self.root.resizable(False, False)
         self.root.attributes('-topmost', True)
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
+
         self.conn = None
         self.speed = StringVar(value="fast")
+        self.curr_mov = {
+            "north":    False,
+            "south":    False,
+            "east":     False,
+            "west":     False,
+        }
+        self.stop_timers = {
+            "north": None,
+            "south": None,
+            "east":  None,
+            "west":  None
+        }
+
         self.setup_ui()
         self.setup_bindings()
 
@@ -85,58 +103,103 @@ class App:
         ctrl_frame.grid(column=0, row=2, columnspan=3, pady=2, sticky="ew")
         joy_container = ttk.Frame(ctrl_frame)
         joy_container.pack(expand=True)
-        ttk.Button(joy_container, text="▲", command=lambda: self.send_direction("north")).grid(column=1, row=0, pady=2)
-        ttk.Button(joy_container, text="◀", command=lambda: self.send_direction("east")).grid(column=0, row=1, padx=2)
-        ttk.Button(joy_container, text="STOP", command=lambda: self.send_direction("stop")).grid(column=1, row=1, padx=2)
-        ttk.Button(joy_container, text="▶", command=lambda: self.send_direction("west")).grid(column=2, row=1, padx=2)
-        ttk.Button(joy_container, text="▼", command=lambda: self.send_direction("south")).grid(column=1, row=2, pady=2)
+        btn_north = ttk.Button(joy_container, text="▲")
+        btn_west  = ttk.Button(joy_container, text="◀")
+        btn_east  = ttk.Button(joy_container, text="▶")
+        btn_south = ttk.Button(joy_container, text="▼")
+        btn_north.grid(column=1, row=0, pady=2)
+        btn_west.grid(column=0, row=1, padx=2)
+        btn_east.grid(column=2, row=1, padx=2)
+        btn_south.grid(column=1, row=2, pady=2)
+        btn_north.bind("<ButtonPress-1>", lambda e: self.handle_press("north"))
+        btn_north.bind("<ButtonRelease-1>", lambda e: self.handle_release("north"))
+        btn_south.bind("<ButtonPress-1>", lambda e: self.handle_press("south"))
+        btn_south.bind("<ButtonRelease-1>", lambda e: self.handle_release("south"))
+        btn_east.bind("<ButtonPress-1>", lambda e: self.handle_press("east"))
+        btn_east.bind("<ButtonRelease-1>", lambda e: self.handle_release("east"))
+        btn_west.bind("<ButtonPress-1>", lambda e: self.handle_press("west"))
+        btn_west.bind("<ButtonRelease-1>", lambda e: self.handle_release("west"))
 
     def setup_bindings(self):
-        self.root.bind("<Up>", lambda e: self.send_direction("north"))
-        self.root.bind("<Down>", lambda e: self.send_direction("south"))
-        self.root.bind("<Left>", lambda e: self.send_direction("east"))
-        self.root.bind("<Right>", lambda e: self.send_direction("west"))
-        self.root.bind("<space>", lambda e: self.send_direction("stop"))
-        self.root.bind("<Escape>", lambda e: self.send_direction("stop"))
+        self.root.bind("<KeyPress-Up>", lambda e: self.handle_press("north"))
+        self.root.bind("<KeyPress-Down>", lambda e: self.handle_press("south"))
+        self.root.bind("<KeyPress-Left>", lambda e: self.handle_press("west"))
+        self.root.bind("<KeyPress-Right>", lambda e: self.handle_press("east"))
+
+        self.root.bind("<KeyRelease-Up>", lambda e: self.handle_release("north"))
+        self.root.bind("<KeyRelease-Down>", lambda e: self.handle_release("south"))
+        self.root.bind("<KeyRelease-Left>", lambda e: self.handle_release("west"))
+        self.root.bind("<KeyRelease-Right>", lambda e: self.handle_release("east"))
+
+        self.root.bind("<space>", lambda e: self.send_direction("stop_all"))
+        self.root.bind("<Escape>", lambda e: self.send_direction("stop_all"))
+
+    def handle_press(self, direction):
+        if self.stop_timers.get(direction):
+            self.root.after_cancel(self.stop_timers[direction])
+            self.stop_timers[direction] = None
+
+        self.send_direction(direction)
+
+    def handle_release(self, direction):
+        self.stop_timers[direction] = self.root.after(INPUT_DELAY, lambda: self.send_direction(f"stop_{direction}"))
 
     def connect(self):
         selected_port = self.port_selection.get().split(' - ')[0]
         if not selected_port:
             messagebox.showwarning("Warning", "Select a serial port.")
             return
-
         try:
             self.conn = serial.Serial(selected_port, BAUD_RATE, timeout=TIMEOUT)
             self.btn_connect.configure(state="disabled")
             self.btn_disconnect.configure(state="enabled")
         except Exception as e:
-            messagebox.showerror("Errore", f"Failed to connect: {str(e)}")
+            messagebox.showerror("Error", f"Failed to connect: {str(e)}")
 
     def disconnect(self):
         try:
-            self.conn.close()
+            if self.conn and self.conn.is_open:
+                self.send_direction("stop_all")
+                self.conn.close()
             self.btn_connect.configure(state="enabled")
             self.btn_disconnect.configure(state="disabled")
         except Exception as e:
-            messagebox.showerror("Errore", f"Failed to disconnect: {str(e)}")
+            messagebox.showerror("Error", f"Failed to disconnect: {str(e)}")
 
     def send_direction(self, direction):
-        if self.conn and self.conn.is_open:
+        if direction.startswith("stop_"):
+            if direction == "stop_all":
+                for key in self.curr_mov.keys():
+                    self.curr_mov[key] = False
+            else:
+                base_dir = direction.replace("stop_", "")
+                if base_dir in self.curr_mov:
+                    self.curr_mov[base_dir] = False
+
+            try:
+                self.run_commands(movements[direction])
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to send stop command: {e}")
+            return
+
+        if direction in self.curr_mov:
+            if self.curr_mov[direction]:
+                return
+
+            self.curr_mov[direction] = True
             try:
                 selected_speed = self.speed.get()
-                if direction != "stop":
-                    for command in speeds[selected_speed]:
-                        self.conn.write(command)
-                        time.sleep(SLEEP_TIME)
-                for command in movements[direction]:
-                    self.conn.write(command)
-                    time.sleep(SLEEP_TIME)
-                return self.conn.read(self.conn.in_waiting)
+                self.run_commands(speeds[selected_speed])
+                self.run_commands(movements[direction])
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to send {direction} to {self.conn}: {str(e)}\n")
-                return ""
-        else:
-            messagebox.showwarning("Warning", "No connection established.")
+                messagebox.showerror("Error", f"Failed to send movement command: {e}")
+
+    def run_commands(self, commands):
+        if self.conn and self.conn.is_open:
+            for command in commands:
+                self.conn.write(command)
+                self.root.update()
+                time.sleep(SLEEP_TIME)
 
     def update_ports(self):
         self.port_selection['values'] = get_ports()
