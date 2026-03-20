@@ -32,19 +32,26 @@ def get_ports():
     ports = [port for port in serial.tools.list_ports.comports() if port[2] != 'n/a']
     return sorted(ports)
 
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 class App:
     def __init__(self, root):
         self.root = root
         self.root.title("Telescope pointer")
         try:
-            self.root.iconbitmap("telescope.ico")
+            self.root.iconbitmap(resource_path("telescope.ico"))
         except Exception as e:
             try:
                 from tkinter import PhotoImage
-                icon = PhotoImage(file="telescope.png")
+                icon = PhotoImage(file=resource_path("telescope.ico"))
                 self.root.iconphoto(False, icon)
             except Exception:
-                messagebox.showwarning("Warning", "Could not set window icon (telescope.ico).")
+                messagebox.showwarning("Warning", "Could not set window icon.")
         self.root.resizable(False, False)
         self.root.attributes('-topmost', True)
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
